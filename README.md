@@ -5,6 +5,8 @@ A Flappy Bird clone built with [Bevy](https://bevyengine.org/) game engine in Ru
 ![Rust](https://img.shields.io/badge/Rust-000000?style=flat&logo=rust&logoColor=white)
 ![Bevy](https://img.shields.io/badge/Bevy-232326?style=flat&logo=bevy&logoColor=white)
 
+![Floopy Birb Gameplay](assets/textures/screengrab.gif)
+
 ## Features
 
 - 🎮 Classic Flappy Bird gameplay
