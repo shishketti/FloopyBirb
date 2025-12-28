@@ -8,7 +8,9 @@ A Flappy Bird clone built with [Bevy](https://bevyengine.org/) game engine in Ru
 ## Features
 
 - 🎮 Classic Flappy Bird gameplay
-- 🐤 Animated bird sprite
+- 🐤 Animated bird sprite with dynamic rotation (tilts up when flapping, dives down when falling)
+- 🏙️ 8 unique city backgrounds with multi-layer parallax scrolling
+- 🎲 Random city selection each game
 - 🎵 Background music with mute toggle
 - 📊 Score tracking
 - 🔄 Menu and game over screens
@@ -46,9 +48,12 @@ floopybirb/
 ├── src/
 │   └── main.rs          # Game logic
 ├── assets/
-│   ├── textures/        # Sprites and background
+│   ├── textures/
 │   │   ├── bird.png     # Bird sprite sheet
-│   │   └── background.png
+│   │   └── city 1-8/    # City backgrounds (5-6 parallax layers each)
+│   │       ├── 1.png    # Furthest layer (sky)
+│   │       ├── 2.png
+│   │       └── ...      # Closer layers
 │   └── music/
 │       └── music.ogg    # Background music
 ├── Cargo.toml
