@@ -263,7 +263,7 @@ fn show_menu_ui(mut commands: Commands) {
     // Title
     commands.spawn((
         TextBundle::from_section(
-            "Floopy Bird",
+            "Floopy Birb",
             TextStyle {
                 font_size: 56.0,
                 color: Color::BLACK,
