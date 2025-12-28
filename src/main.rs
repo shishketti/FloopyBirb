@@ -14,6 +14,15 @@ const BIRD_START_Y: f32 = 0.0;
 const GRAVITY: f32 = -980.0; // px / s^2 (slightly reduced for better feel)
 const FLAP_VELOCITY: f32 = 340.0; // px / s (strong upward impulse)
 const MAX_FALL_SPEED: f32 = -500.0; // Limit fall speed so it doesn't feel too heavy
+const BIRD_MAX_UP_ANGLE: f32 = -25.0; // degrees when flapping up (negative because bird is flipped)
+const BIRD_MAX_DOWN_ANGLE: f32 = 70.0; // degrees when diving down (positive because bird is flipped)
+const BIRD_ROTATION_SPEED: f32 = 8.0; // how fast the bird rotates toward target angle
+
+// Background parallax
+const BG_BASE_SCROLL_SPEED: f32 = 5.0; // px/s - sky moves very slowly
+const BG_MAX_SCROLL_SPEED: f32 = 100.0; // px/s - closest layer moves fast
+const NUM_CITIES: usize = 8;
+const MAX_BG_LAYERS: usize = 7; // most cities have 5-6 layers
 
 // Pipes
 const PIPE_WIDTH: f32 = 80.0;
@@ -48,6 +57,11 @@ struct MusicState {
 
 #[derive(Component)]
 struct MuteIcon;
+
+#[derive(Component)]
+struct BackgroundLayer {
+    speed: f32, // scroll speed for this layer
+}
 
 #[derive(Component)]
 struct Pipe {
@@ -119,7 +133,7 @@ fn main() {
                 .chain()
                 .run_if(in_state(GameState::Playing)),
         )
-        .add_systems(Update, (update_score_text, toggle_mute))
+        .add_systems(Update, (update_score_text, toggle_mute, scroll_background))
         // Game Over
         .add_systems(OnEnter(GameState::GameOver), show_game_over_ui)
         .add_systems(OnExit(GameState::GameOver), despawn_game_over_ui)
@@ -176,6 +190,45 @@ fn toggle_mute(
     }
 }
 
+fn spawn_background_layers(commands: &mut Commands, asset_server: &AssetServer) {
+    // Pick a random city (1-8)
+    let mut rng = rand::thread_rng();
+    let city_num = rng.gen_range(1..=NUM_CITIES);
+
+    // Each city has 5-6 layers
+    // Layer files are named 1.png, 2.png, etc. (1 = furthest back, higher = closer)
+    // We try loading up to MAX_BG_LAYERS (missing files just won't render)
+    for layer_num in 1..=MAX_BG_LAYERS {
+        let path = format!("textures/city {}/{}.png", city_num, layer_num);
+        let texture: Handle<Image> = asset_server.load(&path);
+
+        // Calculate speed: back layers are slower, front layers are faster
+        // Linearly interpolate between base and max speed based on layer position
+        let layer_idx = layer_num - 1;
+        let t = layer_idx as f32 / (MAX_BG_LAYERS - 1) as f32;
+        let speed = BG_BASE_SCROLL_SPEED + t * (BG_MAX_SCROLL_SPEED - BG_BASE_SCROLL_SPEED);
+
+        // Z position: layer 0 at -100, going up towards 0 for front layers
+        let z = -100.0 + (layer_idx as f32 * 10.0);
+
+        // Spawn two copies of each layer for seamless scrolling
+        for i in 0..2 {
+            commands.spawn((
+                SpriteBundle {
+                    texture: texture.clone(),
+                    transform: Transform::from_xyz(WINDOW_W * i as f32, 0.0, z),
+                    sprite: Sprite {
+                        custom_size: Some(Vec2::new(WINDOW_W, WINDOW_H)),
+                        ..default()
+                    },
+                    ..default()
+                },
+                BackgroundLayer { speed },
+            ));
+        }
+    }
+}
+
 fn setup(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -185,16 +238,8 @@ fn setup(
     // Camera
     commands.spawn(Camera2dBundle::default());
 
-    // Background (z = -10 to render behind everything)
-    commands.spawn(SpriteBundle {
-        texture: asset_server.load("textures/background.png"),
-        transform: Transform::from_xyz(0.0, 0.0, -10.0),
-        sprite: Sprite {
-            custom_size: Some(Vec2::new(WINDOW_W, WINDOW_H)),
-            ..default()
-        },
-        ..default()
-    });
+    // Spawn initial background layers
+    spawn_background_layers(&mut commands, &asset_server);
 
     // Bird sprite sheet (3 frames in a row, 34x24 each)
     let layout = TextureAtlasLayout::from_grid(UVec2::new(34, 24), 3, 1, None, None);
@@ -316,9 +361,11 @@ fn menu_input(input: Res<ButtonInput<KeyCode>>, mut next_state: ResMut<NextState
 
 fn start_game(
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
     mut score: ResMut<Score>,
     mut bird_q: Query<(&mut Transform, &mut Bird)>,
     pipes_q: Query<Entity, With<Pipe>>,
+    bg_q: Query<Entity, With<BackgroundLayer>>,
     mut flap_input: ResMut<FlapInput>,
 ) {
     // Reset score
@@ -331,6 +378,7 @@ fn start_game(
     if let Ok((mut tf, mut bird)) = bird_q.get_single_mut() {
         tf.translation.x = BIRD_START_X;
         tf.translation.y = BIRD_START_Y;
+        tf.rotation = Quat::IDENTITY; // Reset rotation to level
         bird.vy = 0.0;
         bird.anim_timer.reset();
     }
@@ -339,6 +387,14 @@ fn start_game(
     for e in &pipes_q {
         commands.entity(e).despawn_recursive();
     }
+
+    // Despawn existing background layers
+    for e in &bg_q {
+        commands.entity(e).despawn_recursive();
+    }
+
+    // Spawn new random background
+    spawn_background_layers(&mut commands, &asset_server);
 
     // Reset spawn timer
     commands.insert_resource(PipeSpawnTimer(Timer::from_seconds(
@@ -392,6 +448,35 @@ fn apply_bird_physics(time: Res<Time<Fixed>>, mut q: Query<(&mut Transform, &mut
 
         // Update position
         tf.translation.y += bird.vy * dt;
+
+        // Calculate target rotation based on vertical velocity
+        // Map velocity to angle: positive vy = tilt up, negative vy = tilt down
+        let velocity_ratio = bird.vy / FLAP_VELOCITY; // normalized velocity
+        let target_angle_deg = if bird.vy > 0.0 {
+            // Going up - tilt upward (positive angle)
+            BIRD_MAX_UP_ANGLE * (velocity_ratio).min(1.0)
+        } else {
+            // Falling - tilt downward (negative angle), more aggressive as we fall faster
+            let fall_ratio = bird.vy / MAX_FALL_SPEED; // 0 to 1 as we approach max fall
+            BIRD_MAX_DOWN_ANGLE * fall_ratio.abs().min(1.0)
+        };
+        let target_angle = target_angle_deg.to_radians();
+
+        // Smoothly interpolate current rotation toward target
+        let current_angle = tf.rotation.to_euler(EulerRot::ZYX).0;
+        let new_angle = current_angle + (target_angle - current_angle) * BIRD_ROTATION_SPEED * dt;
+        tf.rotation = Quat::from_rotation_z(new_angle);
+    }
+}
+
+fn scroll_background(time: Res<Time>, mut bg_q: Query<(&mut Transform, &BackgroundLayer)>) {
+    let dt = time.delta_seconds();
+    for (mut tf, layer) in &mut bg_q {
+        tf.translation.x -= layer.speed * dt;
+        // Wrap around when it goes too far left
+        if tf.translation.x <= -WINDOW_W {
+            tf.translation.x += WINDOW_W * 2.0;
+        }
     }
 }
 
